@@ -1,0 +1,26 @@
+{
+  "name": "nse-trading-toolkit",
+  "description": "10 Claude skills for day trading on NSE and BSE: scan Indian stocks, track news and NSE filings, time every entry and exit, and replay every outcome before you risk a rupee.",
+  "version": "1.0.0",
+  "author": {
+    "name": "Charan",
+    "url": "https://github.com/charan2711"
+  },
+  "homepage": "https://github.com/charan2711/nse-trading-toolkit",
+  "repository": "https://github.com/charan2711/nse-trading-toolkit",
+  "license": "MIT",
+  "keywords": [
+    "claude-code",
+    "claude-skills",
+    "day-trading",
+    "stock-market",
+    "backtesting",
+    "opening-range-breakout",
+    "paper-trading",
+    "nse",
+    "india",
+    "zerodha",
+    "kite"
+  ],
+  "skills": "./"
+}

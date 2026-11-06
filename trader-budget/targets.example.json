@@ -1,0 +1,11 @@
+{
+  "source": "an example split across five large NSE stocks (made up for the docs, not a recommendation)",
+  "as_of": "2026-11-06",
+  "weights": [
+    {"ticker": "RELIANCE", "name": "Reliance Industries", "weight": 30},
+    {"ticker": "HDFCBANK", "name": "HDFC Bank", "weight": 25},
+    {"ticker": "INFY", "name": "Infosys", "weight": 20},
+    {"ticker": "TCS", "name": "Tata Consultancy Services", "weight": 15},
+    {"ticker": "ITC", "name": "ITC", "weight": 10}
+  ]
+}

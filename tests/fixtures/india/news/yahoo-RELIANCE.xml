@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- SAMPLE fixture in Yahoo's headline RSS shape: the headlines are made up for the tests. -->
+<rss version="2.0"><channel><title>Yahoo! Finance: RELIANCE.NS News</title>
+<item><title>Reliance Industries shares rise as Jio tariff hike lifts outlook; brokerage raises target price</title>
+<link>https://finance.yahoo.com/news/sample-reliance-jio-tariff-0001.html</link><guid isPermaLink="false">sample-0001</guid>
+<pubDate>Fri, 06 Nov 2026 03:10:00 +0000</pubDate><description>Analysts at a domestic brokerage upgrade Reliance Industries (NSE: RELIANCE) after the tariff move.</description></item>
+<item><title>Sensex, Nifty open higher as FIIs turn buyers; rupee steady ahead of RBI policy</title>
+<link>https://finance.yahoo.com/news/sample-market-open-0002.html</link><guid isPermaLink="false">sample-0002</guid>
+<pubDate>Fri, 06 Nov 2026 03:50:00 +0000</pubDate><description>Benchmarks gain in early trade; heavyweights RELIANCE.NS and HDFC Bank lead.</description></item>
+<item><title>Old story from last week</title>
+<link>https://finance.yahoo.com/news/sample-old-0003.html</link><guid isPermaLink="false">sample-0003</guid>
+<pubDate>Fri, 30 Oct 2026 05:00:00 +0000</pubDate><description>Too old for a 48-hour window.</description></item>
+</channel></rss>
