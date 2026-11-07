@@ -24,5 +24,20 @@
   "allow_options": false,
   "allow_margin": false,
   "allow_short": false,
-  "charges": {}
+  "charges": {},
+  "swing": {
+    "swing_capital": 200000,
+    "risk_per_trade_pct": 1.0,
+    "max_positions": 5,
+    "max_open_risk_pct": 6.0,
+    "max_position_pct": 25.0,
+    "min_traded_value_cr": 10.0,
+    "target_r": 2.0,
+    "time_stop_days": 10,
+    "setups": [
+      "pullback",
+      "breakout",
+      "rsi60"
+    ]
+  }
 }

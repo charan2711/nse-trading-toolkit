@@ -33,7 +33,7 @@ at the stop).
 
 Charges (Zerodha equity intraday, the defaults; override any of them with
 "charges" in the config): brokerage 0.03% or Rs 20 per executed order,
-whichever is lower; STT 0.025% on the sell; NSE transaction charges 0.00297%
+whichever is lower; STT 0.025% on the sell; NSE transaction charges 0.00307%
 (BSE 0.00375%); SEBI Rs 10 a crore; stamp duty 0.003% on the buy; GST 18% on
 brokerage, transaction and SEBI charges. They are an estimate: the contract
 note is the bill.
@@ -90,7 +90,7 @@ DEFAULTS = {
 }
 CHARGES = {  # Zerodha equity intraday (zerodha.com/charges, read 2026-11-06)
     "brokerage_pct": 0.03, "brokerage_max": 20.0, "stt_sell_pct": 0.025,
-    "txn_pct_nse": 0.00297, "txn_pct_bse": 0.00375, "sebi_per_crore": 10.0,
+    "txn_pct_nse": 0.00307, "txn_pct_bse": 0.00375, "sebi_per_crore": 10.0,
     "stamp_buy_pct": 0.003, "gst_pct": 18.0,
 }
 EPS = 1e-9

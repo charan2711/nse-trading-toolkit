@@ -63,18 +63,18 @@ class Flow(unittest.TestCase):
         code, out, _ = self.budget
         self.assertEqual(code, 0, out)
         self.assertIn("39 shares of RELIANCE = ₹51,164.10", out)
-        self.assertIn("₹491.57", out)
+        self.assertIn("₹491.68", out)
         o = read(self.d, "orders.json")["orders"][0]
         self.assertEqual((o["variety"], o["product"], o["transaction_type"], o["quantity"]), ("co", "MIS", "BUY", 39))
         self.assertAlmostEqual(o["trigger_price"], 1300.7)
-        self.assertAlmostEqual(o["plan"]["charges"], 54.77)
-        self.assertAlmostEqual(o["plan"]["gain_at_target"], 381.70)
+        self.assertAlmostEqual(o["plan"]["charges"], 54.88)
+        self.assertAlmostEqual(o["plan"]["gain_at_target"], 381.58)
 
     def test_risk_passes_the_order(self):
         code, out, _ = self.risk
         self.assertEqual(code, 0, out)
         self.assertIn("PASS  #1 BUY RELIANCE 39 shares", out)
-        self.assertIn("max loss ₹491.57 with ₹54.77 of charges (limit ₹500)", out)
+        self.assertIn("max loss ₹491.68 with ₹54.88 of charges (limit ₹500)", out)
 
     def test_paper_ticket_yes_fill_then_flatten_exits_the_cover_order(self):
         d = tempfile.mkdtemp()

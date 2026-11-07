@@ -89,7 +89,7 @@ Whole shares only (NSE has no fractions). The size is the smallest of four limit
 **Charges** (Zerodha equity intraday, read from zerodha.com/charges on
 2026-11-06; override any of them with `"charges"` in the config): brokerage
 0.03% or ₹20 per executed order, whichever is lower; STT 0.025% on the sell
-(rounded to the rupee); NSE transaction charges 0.00297% (BSE 0.00375%); SEBI
+(rounded to the rupee); NSE transaction charges 0.00307% (BSE 0.00375%); SEBI
 ₹10 a crore; stamp duty 0.003% on the buy; GST 18% on brokerage, transaction
 and SEBI charges. They are an estimate: the contract note is the bill. If
 Zerodha squares the position off for you it adds ₹50 + GST per order, which
@@ -127,9 +127,9 @@ budget, 10% cash buffer, ₹500 max loss.
 | max order | ₹80,000 / 1311.90 | 60 |
 | cash | ₹1,00,000 minus ₹10,000 = ₹90,000 / 1311.90 | 68 |
 
-39 shares = ₹51,164.10. At the stop: 39 x 11.20 = ₹436.80, plus ₹54.77 of
-charges (brokerage ₹30.57, STT ₹13, exchange ₹3.03, SEBI ₹0.10, stamp ₹2, GST
-₹6.07) = ₹491.57. At the target: ₹381.70 after charges. It writes:
+39 shares = ₹51,164.10. At the stop: 39 x 11.20 = ₹436.80, plus ₹54.88 of
+charges (brokerage ₹30.57, STT ₹13, exchange ₹3.13, SEBI ₹0.10, stamp ₹2, GST
+₹6.08) = ₹491.68. At the target: ₹381.58 after charges. It writes:
 
 ```json
 {"variety": "co", "exchange": "NSE", "tradingsymbol": "RELIANCE", "transaction_type": "BUY",
@@ -137,7 +137,7 @@ charges (brokerage ₹30.57, STT ₹13, exchange ₹3.03, SEBI ₹0.10, stamp �
  "trigger_price": 1300.7, "tag": "daytrader", "target_price": 1323.1,
  "why": "opening-range breakout on RELIANCE: 39 shares, bound by your ₹500 max loss per trade ...",
  "plan": {"entry": 1311.9, "stop": 1300.7, "target": 1323.1, "risk_per_share": 11.2,
-          "loss_at_stop": 436.8, "charges": 54.77, "max_loss": 491.57, "gain_at_target": 381.7, ...}}
+          "loss_at_stop": 436.8, "charges": 54.88, "max_loss": 491.68, "gain_at_target": 381.7, ...}}
 ```
 
 `target_price`, `why` and `plan` are notes for trader-risk, trader-broker and

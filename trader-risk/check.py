@@ -105,7 +105,7 @@ TICKER = re.compile(r"^[A-Z0-9][A-Z0-9&\-]{0,19}$")
 TICK_BANDS = ((250, 0.01), (1000, 0.05), (5000, 0.10), (10000, 0.50), (20000, 1.00), (None, 5.00))
 CHARGES = {  # Zerodha equity intraday (zerodha.com/charges, read 2026-11-06); same as trader-budget
     "brokerage_pct": 0.03, "brokerage_max": 20.0, "stt_sell_pct": 0.025,
-    "txn_pct_nse": 0.00297, "txn_pct_bse": 0.00375, "sebi_per_crore": 10.0,
+    "txn_pct_nse": 0.00307, "txn_pct_bse": 0.00375, "sebi_per_crore": 10.0,
     "stamp_buy_pct": 0.003, "gst_pct": 18.0,
 }
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
@@ -353,6 +353,18 @@ def charges(qty, buy, sell, exchange="NSE", over=None):
     return round(sum(round(v, 2) for v in (brk, stt, txn, sebi, stamp, gst)), 2)
 
 
+def delivery_charges(qty, buy, sell, exchange="NSE"):
+    """Zerodha equity delivery round trip (zerodha.com/charges, read 2026-11-07): no brokerage, STT 0.1%
+    each side, transaction charges, SEBI, stamp 0.015% on the buy, GST, DP Rs 15.34 on the sell."""
+    bv, sv = qty * float(buy), qty * float(sell)
+    stt = round(bv * 0.001) + round(sv * 0.001)
+    txn = (bv + sv) * (0.00375 if exchange == "BSE" else 0.00307) / 100.0
+    sebi = (bv + sv) * 10.0 / 1e7
+    stamp = round(bv * 0.00015)
+    gst = (txn + sebi) * 0.18
+    return round(sum(round(v, 2) for v in (stt, txn, sebi, stamp, gst, 15.34)), 2)
+
+
 def _p(x):
     return "%.2f" % float(x)
 
@@ -478,7 +490,18 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         plan = o.get("plan") if isinstance(o.get("plan"), dict) else {}
         exit_cover = bool(o.get("exit_cover"))
         cover = variety == "co" and not exit_cover
+        gtt = o.get("gtt") if isinstance(o.get("gtt"), dict) else None
+        swing = product == "CNC" and gtt is not None and not exit_cover
         value = None
+        if swing:
+            for k in ("lower_trigger_value", "upper_trigger_value", "trigger_value", "lower_limit_price",
+                      "upper_limit_price", "limit_price"):
+                v = _f(gtt.get(k))
+                if gtt.get(k) is not None and (v is None or v <= 0 or not on_tick(v, tick_for(v))):
+                    reasons.append("format: the GTT's %s %r is not a price on the NSE tick" % (k, gtt.get(k)))
+            gq = _f(gtt.get("lower_quantity", gtt.get("quantity")))
+            if gq is not None and _f(qty) is not None and abs(gq - _f(qty)) > 1e-9:
+                reasons.append("format: the GTT sells %s shares but the buy is for %s" % (_num(gq), qty))
 
         # format
         if not sym:
@@ -619,16 +642,23 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                                "If you bought it, record the fill first (ticket.py fill)" % (sym, _num(held)))
 
         # day-trade checks: stop, loss, reward:risk, daily loss, trades, window
-        max_loss = risk_ps = rr = stop = target = fees = None
+        max_loss = risk_ps = rr = stop = target = fees = loss_cap = None
         if kind == "entry" and side in ("buy", "sell"):
             long = side == "buy"
             leg_stop = _f(o.get("trigger_price")) if cover else None
+            if swing:
+                leg_stop = _f(gtt.get("lower_trigger_value", gtt.get("trigger_value")))
             plan_stop = _f(plan.get("stop"))
             stop = leg_stop if leg_stop else plan_stop
             target = _f(o.get("target_price")) or _f(plan.get("target"))
+            if swing and _f(gtt.get("upper_trigger_value")):
+                target = _f(gtt.get("upper_trigger_value"))
             if leg_stop and plan_stop and abs(leg_stop - plan_stop) > CENT:
                 warns.append("the cover order's stop %s differs from the plan's stop %s: the order's is the one "
                              "the exchange uses" % (_p(leg_stop), _p(plan_stop)))
+            if swing and leg_stop:
+                info.append("swing (CNC delivery): the %s to Kite as a GTT order after the buy fills; "
+                            "until then there is no stop at the exchange" % ("stop and target go" if target else "stop goes"))
             if stop and not leg_stop:
                 warns.append("the stop %s is in the plan only, not at the exchange: use a cover order "
                              "(trader-budget writes one), or set a stop alert (alerts.py add --from-plan)" % _p(stop))
@@ -647,14 +677,22 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     risk_ps = risk_c / 100.0
                     shares = q if q is not None else ((value or 0) / ref)
                     at_stop = round(shares * risk_ps, 2)
-                    fees = charges(shares, ref if long else stop, stop if long else ref,
-                                   "BSE" if exch == "BSE" else "NSE", c.get("charges"))
+                    if swing:
+                        fees = delivery_charges(shares, ref, stop, "BSE" if exch == "BSE" else "NSE")
+                        sw = c.get("swing") or {}
+                        cap = float(sw.get("swing_capital", 200000)) * float(sw.get("risk_per_trade_pct", 1.0)) / 100.0
+                    else:
+                        fees = charges(shares, ref if long else stop, stop if long else ref,
+                                       "BSE" if exch == "BSE" else "NSE", c.get("charges"))
+                        cap = cfg_inr(c, "max_loss_per_trade")
                     max_loss = round(at_stop + fees, 2)
-                    cap = cfg_inr(c, "max_loss_per_trade")
+                    loss_cap = cap
                     if cap and max_loss > cap + CENT:
                         later.append("loss: %s shares x %s risk a share = %s at the stop, plus %s of charges = %s, "
-                                     "over your %s max loss per trade" % (_num(shares), _p(risk_ps), money(at_stop),
-                                                                          money(fees), money(max_loss), money(cap)))
+                                     "over your %s max loss per %s" % (_num(shares), _p(risk_ps), money(at_stop),
+                                                                          money(fees), money(max_loss), money(cap),
+                                                                          "swing trade (risk_per_trade_pct of "
+                                                                          "swing_capital)" if swing else "trade"))
                     min_rr = _f(c.get("min_reward_risk"))
                     if target:
                         if (long and target <= ref + CENT) or (not long and target >= ref - CENT):
@@ -668,18 +706,19 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                     elif min_rr:
                         later.append("reward:risk: no target to measure it against (min_reward_risk %s)"
                                      % _num(min_rr))
-            daily = cfg_inr(c, "max_daily_loss")
+            daily = None if swing else cfg_inr(c, "max_daily_loss")
             if daily and max_loss is not None:
                 used = loss_today + batch_loss
                 if used + max_loss > daily + CENT:
                     later.append("daily loss: %s already at risk today plus %s for this one = %s, over your %s "
                                  "daily loss limit" % (money(used), money(max_loss), money(used + max_loss),
                                                        money(daily)))
-            cap_t = int(c.get("max_trades_per_day") or 0)
+            cap_t = 0 if swing else int(c.get("max_trades_per_day") or 0)
             if cap_t and len(entries_today) + batch_entries >= cap_t:
                 later.append("trades: %d entries placed today plus %d passed earlier in this batch, your limit "
                              "is %d a day" % (len(entries_today), batch_entries, cap_t))
-            later.extend(win_reasons)
+            if not swing:
+                later.extend(win_reasons)
             lim = circuits.get(sym)
             if lim and ref and long and _f(lim[1]) and ref >= 0.99 * float(lim[1]):
                 warns.append("%s is within 1%% of its upper circuit %s: if it locks there, there may be no "
@@ -690,8 +729,7 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                             % (_p(ref), REF_WORDS.get(ref_from, ref_from), _p(stop),
                                _p(target) if target else "none", _p(risk_ps)))
                 info.append("max loss %s with %s of charges%s, reward:risk %s%s"
-                            % (money(max_loss), money(fees or 0), (" (limit %s)" % money(cfg_inr(c, "max_loss_per_trade")))
-                               if cfg_inr(c, "max_loss_per_trade") else "",
+                            % (money(max_loss), money(fees or 0), (" (limit %s)" % money(loss_cap)) if loss_cap else "",
                                ("%.2f" % rr) if rr is not None else "n/a",
                                (" (min %s)" % _num(c["min_reward_risk"])) if _f(c.get("min_reward_risk")) else ""))
             if daily or cap_t:

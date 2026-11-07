@@ -1,6 +1,6 @@
 # NSE Trading Toolkit
 
-10 Claude skills for day trading on NSE and BSE: scan Indian stocks, track news and NSE filings, time every entry and exit, and replay every outcome before you risk a rupee.
+11 Claude skills for trading Indian stocks on NSE and BSE, intraday and swing: scan, track news and NSE filings, time every entry and exit, backtest, and replay every outcome before you risk a rupee.
 
 Based on the Day Trader skill,
 [github.com/Jakeschincariol/day-trader-skill](https://github.com/Jakeschincariol/day-trader-skill)
@@ -50,7 +50,7 @@ The tools need Python 3.8 or newer. Nothing to pip install.
    "Needs approval" (Customize, Connectors, tool permissions), never "Always
    allow".
 
-## The ten
+## The eleven
 
 | command | job | what it does |
 | --- | --- | --- |
@@ -64,6 +64,7 @@ The tools need Python 3.8 or newer. Nothing to pip install.
 | `/trader-broker` | Order Executor | Sends approved orders to Zerodha Kite as cover orders, paper trading by default, never without your yes. |
 | `/trader-alerts` | Price Alerts | Rings when a price, a stop, the flat-by time or the 9:15 bell hits. |
 | `/trader-insider` | Insider Tracker | SEBI PIT insider trades and NSE bulk / block deals, flagged when they touch your stocks. |
+| `/trader-swing` | Swing Trader | After-close scan for pullbacks, breakouts, RSI-60 momentum and stocks near a breakout; CNC buy with a GTT stop and target; a costed backtest. |
 
 ## How to use it
 
@@ -74,6 +75,7 @@ what the last one wrote:
 scanner -> news -> entry -> exit -> timemachine -> budget -> risk -> broker   (one trade)
 alerts: stop, target, flat by 15:05                                           (while it is open)
 news / insider                                                                (on a schedule)
+swing: scan after 15:30 -> plan -> risk -> broker (CNC + GTT) -> manage each evening
 ```
 
 An example: RELIANCE, Friday 2026-11-06, on Kite's real 5-minute candles.
@@ -92,8 +94,8 @@ An example: RELIANCE, Friday 2026-11-06, on Kite's real 5-minute candles.
    sessions. On the test fixture the verdict is close to a coin flip. That is
    the point of looking before you risk a rupee.
 6. **`/trader-budget`** with a ₹1,00,000 budget and a ₹500 max loss: 39 shares
-   (₹51,164.10). At the stop: ₹436.80 plus ₹54.77 of charges = ₹491.57. At
-   the target: ₹381.70 after charges. It writes one Kite cover order: buy 39
+   (₹51,164.10). At the stop: ₹436.80 plus ₹54.88 of charges = ₹491.68. At
+   the target: ₹381.58 after charges. It writes one Kite cover order: buy 39
    RELIANCE, MIS, stop-loss trigger 1300.70.
 7. **`/trader-risk`** checks it against your limits: max loss with charges,
    daily loss, trades per day, reward to risk, the entry window, position
@@ -123,6 +125,8 @@ python3 trader-alerts/alerts.py add --from-plan                        # stop, t
 python3 trader-alerts/alerts.py check --kite quotes.json               # rings what hit, once
 python3 trader-insider/insider.py pit --buys --market-only             # insiders buying
 python3 trader-insider/insider.py deals                                # today's bulk and block deals
+python3 trader-swing/swing.py scan --data kite-daily/                   # swing setups + near breakouts
+python3 trader-swing/swing.py backtest --data kite-daily/               # the rules on 5 years, with costs
 ```
 
 ```bash
@@ -135,6 +139,22 @@ history built around that day, and sample NSE files (marked SAMPLE) for the
 equity list, announcements, insider trades and deals. NSE's API field names
 are not documented and were not checked live from here: the parsers read
 them loosely, and the first live run is worth watching.
+
+## Swing trading
+
+`/trader-swing` holds stocks for days to weeks as delivery (CNC). After the
+close it checks the Nifty's trend, scans for three setups (pullback to the
+20-day EMA, volume breakout from a base, multi-timeframe RSI-60) and lists
+stocks coiling just under a breakout, with the trigger and a stop. It sizes a
+trade to 1% of your swing capital after Zerodha's delivery charges and writes
+a CNC limit buy plus a GTT OCO order for the stop and the 2R target.
+
+Its backtest runs the exact rules on Kite daily candles with costs. On 36
+large caps from 2022 to 2026 the honest answer was: no edge after costs
+(400 trades, 37% wins, -0.05R a trade; breakout and RSI-60 near break-even,
+pullback negative) while the Nifty rose 40%. The tool is for testing ideas on
+your own stocks before risking money, not a proof that any setup works.
+See `trader-swing/SKILL.md`.
 
 ## Fine print
 
@@ -181,7 +201,8 @@ is not on it.
 trading days late; bulk and block deals are published after the close.
 
 **Taxes.** Intraday equity gains are speculative business income in India,
-taxed at your slab rate. Nothing here is tax advice.
+taxed at your slab rate; swing (delivery) gains held under 12 months are
+short-term capital gains. Nothing here is tax advice.
 
 ## Files
 
@@ -196,6 +217,7 @@ trader-budget/      SKILL.md, size.py, config.example.json, targets.example.json
 trader-broker/      SKILL.md, ticket.py, claude_desktop_config.example.json
 trader-alerts/      SKILL.md, alerts.py, alerts.example.json
 trader-insider/     SKILL.md, insider.py
+trader-swing/       SKILL.md, swing.py
 tests/              unittest suite + offline fixtures
 ```
 

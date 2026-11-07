@@ -9,7 +9,7 @@
   "plugins": [
     {
       "name": "nse-trading-toolkit",
-      "description": "Ten Claude skills for intraday trading on NSE and BSE: a chart scanner, a news monitor with NSE announcements, an entry timer, an exit planner, a time machine that replays 10,000 sessions, a risk manager, a budget manager with Zerodha charges, a Kite order executor (paper by default, never without your yes), price alerts and an insider and bulk / block deal tracker.",
+      "description": "Eleven Claude skills for trading NSE and BSE stocks: a chart scanner, a news monitor with NSE announcements, an entry timer, an exit planner, a time machine that replays 10,000 sessions, a risk manager, a budget manager with Zerodha charges, a Kite order executor (paper by default, never without your yes), price alerts, an insider and bulk / block deal tracker, and a swing trader with a near-breakout scan, GTT stops and a costed backtest.",
       "source": "./",
       "category": "productivity",
       "homepage": "https://github.com/charan2711/nse-trading-toolkit"

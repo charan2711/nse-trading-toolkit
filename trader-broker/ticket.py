@@ -196,6 +196,27 @@ def _p(v):
     return "%.2f" % float(v)
 
 
+def swing_gtt(order):
+    """The GTT stop/target block of a trader-swing order (CNC), or None."""
+    g = order.get("gtt")
+    if isinstance(g, dict) and str(order.get("product") or "").upper() == "CNC":
+        return g
+    return None
+
+
+GTT_FIELDS = ("exchange", "tradingsymbol", "transaction_type", "product", "trigger_type", "last_price",
+              "trigger_value", "limit_price", "quantity", "lower_trigger_value", "lower_limit_price",
+              "lower_quantity", "upper_trigger_value", "upper_limit_price", "upper_quantity")
+
+
+def gtt_input(order, last_price=None):
+    """The arguments for the Kite connector's place_gtt_order, placed after the buy fills."""
+    g = swing_gtt(order) or {}
+    out = {k: g[k] for k in GTT_FIELDS if k in g and g[k] is not None}
+    out["last_price"] = last_price if last_price is not None else "<Kite get_ltp now>"
+    return out
+
+
 def is_cover(order):
     return str(order.get("variety") or "").lower() == "co"
 
@@ -208,6 +229,11 @@ def max_loss(order):
     when trader-budget worked them out, or (None, stop)."""
     plan = order.get("plan") or {}
     stop = (_f(order.get("trigger_price")) if is_cover(order) else None) or _f(plan.get("stop"))
+    g = swing_gtt(order)
+    if g:
+        stop = _f(g.get("lower_trigger_value", g.get("trigger_value"))) or stop
+        if _f(plan.get("loss_at_stop")) is not None:
+            return round(_f(plan["loss_at_stop"]), 2), stop
     q = _f(order.get("quantity", order.get("qty")))
     if not stop or not q:
         return None, stop
@@ -249,6 +275,18 @@ def plain_parts(order):
         how = "market"
     head = "%s %s %s on %s, %s, %s, %s" % (side, q, sym if ex == "NSE" else sym.split(":", 1)[-1], ex, how,
                                            product, val)
+    g = swing_gtt(order)
+    if g:
+        parts = [head + ", swing"]
+        lo = g.get("lower_trigger_value", g.get("trigger_value"))
+        hi = g.get("upper_trigger_value")
+        parts.append("after the fill: a GTT %s at Kite, stop %s%s (a second order, it needs its own yes)" % (
+            "OCO (two-leg)" if hi else "stop", _p(lo), (", target %s" % _p(hi)) if hi else ""))
+        loss, stop = max_loss(order)
+        if loss is not None:
+            parts.append("max loss about %s if the stop fills at %s, charges included (a gap down can lose more)"
+                         % (_money(loss), _p(stop)))
+        return parts
     if not is_cover(order):
         return [head]
     parts = [head + ", cover order"]
@@ -398,6 +436,12 @@ def render(order, idx, total, cfg, risk, state, today):
         lines.append("  Find the stop-loss leg first: get_orders, the order whose parent_order_id is %s"
                      % (order["exit_cover"].get("parent_order_id") or "the entry's order id"))
         lines.append("  and status TRIGGER PENDING. Its order_id goes in the call above.")
+    elif swing_gtt(order):
+        lines.append("  After the buy fills, the exits are a second call, place_gtt_order, with:")
+        for l in json.dumps(gtt_input(order), indent=2).splitlines():
+            lines.append("    " + l)
+        lines.append("  A GTT triggers a LIMIT order: in a gap through the limit it may not fill. Until the GTT is")
+        lines.append("  in, there is no stop at the exchange.")
     elif is_cover(order):
         lines.append("  A cover order buys and places the stop-loss (SL-M at the trigger) together. Kite only")
         lines.append("  takes a trigger inside its allowed range for the stock; outside it, Kite rejects the order.")
@@ -599,7 +643,16 @@ def cmd_result(a):
         apply_fill(a.portfolio, cfg, rec["symbol"], rec["side"], a.filled_qty, a.filled_price, today)
         log_fill(a.state, now, today, rec["symbol"], rec["side"], a.filled_qty, a.filled_price)
         print("Added the %sfill to %s." % ("paper " if new["paper"] else "", a.portfolio))
-        if rec.get("kind") == "entry" and rec.get("target"):
+        if rec.get("kind") == "entry" and swing_gtt(order):
+            _record_swing(a, order, a.filled_qty, a.filled_price, today)
+            if new["paper"]:
+                print("Paper: no GTT goes to Kite. swing.py manage --positions trader/swing-positions.json tracks "
+                      "the stop, target and time stop each evening.")
+            else:
+                print("Next, the exits: show the user this second order and get a yes for it, then call the Kite "
+                      "connector's place_gtt_order with (last_price from get_ltp):")
+                print(json.dumps(gtt_input(order), indent=2))
+        elif rec.get("kind") == "entry" and rec.get("target"):
             print("Watch the stop and the target: alerts.py add --from-plan (and alerts.py check every few minutes).")
     elif a.status == "placed":
         print("When it fills (Kite get_order_trades %s), record it: ticket.py fill --symbol %s --side %s --qty Q "
@@ -608,6 +661,20 @@ def cmd_result(a):
             print("The stop-loss leg sits at the exchange. When it fills, or you exit at the target, record that "
                   "sell the same way.")
     return 0
+
+
+def _record_swing(a, order, qty, price, today):
+    """Add a filled swing buy to trader/swing-positions.json for swing.py manage."""
+    path = os.path.join(os.path.dirname(a.portfolio) or ".", "swing-positions.json")
+    rows = read_json(path, "swing positions", required=False) or []
+    plan = order.get("plan") or {}
+    g = swing_gtt(order) or {}
+    stop = _f(g.get("lower_trigger_value", g.get("trigger_value"))) or _f(plan.get("stop"))
+    rows.append({"symbol": order_symbol(order), "setup": plan.get("setup", ""), "qty": float(qty),
+                 "entry": float(price), "stop": stop, "initial_stop": stop,
+                 "target": _f(g.get("upper_trigger_value")) or _f(plan.get("target")), "entry_date": today})
+    write_json(path, rows)
+    print("Added it to %s (swing.py manage reads it)." % path)
 
 
 def cmd_fill(a):

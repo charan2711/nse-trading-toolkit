@@ -168,7 +168,7 @@ ORDER 1 of 1, PAPER (nothing goes to Kite)
   BUY 39 RELIANCE on NSE, market, intraday (MIS), good for today, cover order
   stop-loss trigger 1300.70 (sent with the order, sits at the exchange)
   target 1323.10 (watched by trader-alerts; Kite has no take-profit leg)
-  max loss about ₹491.57 if the stop fills at 1300.70, charges included
+  max loss about ₹491.68 if the stop fills at 1300.70, charges included
   READY: trader-risk PASS, waiting for your yes
   The Kite call it would make:
     {"variety": "co", "exchange": "NSE", "tradingsymbol": "RELIANCE", "transaction_type": "BUY",

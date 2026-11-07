@@ -133,7 +133,7 @@ account with a ₹500 max loss per trade:
 ```
 PASS  #1 BUY RELIANCE 39 shares, MIS cover order, entry
           entry 1311.90 (the plan's entry), stop 1300.70, target 1323.10: risk 11.20 a share
-          max loss ₹491.57 with ₹54.77 of charges (limit ₹500), reward:risk 1.00 (min 1)
+          max loss ₹491.68 with ₹54.88 of charges (limit ₹500), reward:risk 1.00 (min 1)
           today before this: 0 of 3 trades, ₹0 of ₹1,500 daily loss
 
 1 passed, 0 blocked at 2026-11-06 09:51 IST. Cash after the passed orders: ₹48,835.90 (paper trading).

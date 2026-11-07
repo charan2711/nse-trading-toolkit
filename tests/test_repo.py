@@ -5,14 +5,14 @@ import unittest
 
 from _load import ROOT
 
-# the Indian day-trading pack: the ten skill folders
+# the Indian trading pack: the eleven skill folders
 SKILLS = ["trader-scanner", "trader-news", "trader-entry", "trader-exit", "trader-timemachine",
-          "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-insider"]
-ABOUT = ("10 Claude skills for day trading on NSE and BSE: scan Indian stocks, track news and NSE filings, "
-         "time every entry and exit, and replay every outcome before you risk a rupee.")
+          "trader-risk", "trader-budget", "trader-broker", "trader-alerts", "trader-insider", "trader-swing"]
+ABOUT = ("11 Claude skills for trading Indian stocks on NSE and BSE, intraday and swing: scan, track news and "
+         "NSE filings, time every entry and exit, backtest, and replay every outcome before you risk a rupee.")
 # skills on the way to an order carry the safety block
 ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
-              "trader-risk", "trader-broker", "trader-alerts"]
+              "trader-risk", "trader-swing", "trader-broker", "trader-alerts"]
 V1_ONLY = ["trader-copycat", "trader-screener", "trader-tax", "trader-rebalance"]
 
 
@@ -32,7 +32,7 @@ def every_text_file():
 
 
 class Repo(unittest.TestCase):
-    def test_ten_skill_folders_at_the_root(self):
+    def test_eleven_skill_folders_at_the_root(self):
         found = sorted(d for d in os.listdir(ROOT)
                        if os.path.isfile(os.path.join(ROOT, d, "SKILL.md")))
         self.assertEqual(found, sorted(SKILLS))
@@ -128,6 +128,7 @@ class Repo(unittest.TestCase):
     def test_day_trading_limits_ship_in_the_example_config(self):
         with open(os.path.join(ROOT, "trader-budget", "config.example.json")) as fh:
             cfg = json.load(fh)
+        self.assertEqual(cfg["swing"]["risk_per_trade_pct"], 1.0)
         for k in ("max_loss_per_trade_inr", "max_daily_loss_inr", "max_trades_per_day",
                   "min_reward_risk", "require_stop", "no_entries_after", "flat_by"):
             self.assertIn(k, cfg, k)

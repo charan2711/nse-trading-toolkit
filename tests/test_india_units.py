@@ -67,7 +67,7 @@ class Charges(unittest.TestCase):
         self.assertEqual(c["brokerage"], 30.57)       # 0.03% of each side, under the ₹20 cap
         self.assertEqual(c["stt"], 13)                 # 0.025% of the sell, rounded to the rupee
         self.assertEqual(c["stamp"], 2)                # 0.003% of the buy, rounded
-        self.assertEqual(c["total"], 54.77)
+        self.assertEqual(c["total"], 54.88)
 
     def test_brokerage_caps_at_20_an_order(self):
         c = size.charges(1000, 1000, 1000)
