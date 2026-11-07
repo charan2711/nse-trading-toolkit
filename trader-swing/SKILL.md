@@ -8,13 +8,16 @@ description: >-
   RSI-60 momentum setup) plus a watch list of stocks coiling just under a
   breakout, sizes a trade to 1% of your swing capital with Zerodha delivery
   charges counted, and writes a CNC limit buy plus a Kite GTT OCO order for
-  the stop and target. It also backtests the exact rules on years of Kite
+  the stop and target. A momentum mode finds the day's bursts (up 5%+ on 2x
+  volume, closing near the high) for a 5-day hold, live at 3:15 PM from Kite
+  quotes. It also backtests the exact rules on years of Kite
   daily candles with costs and an out-of-sample split, and manages open
   positions (breakeven stop, time stop, RSI exit). Use when the user says
   "swing trade", "positional trade", "which stocks are breaking out", "stocks
   near breakout", "about to break out", "swing scan", "RSI 60 strategy",
+  "momentum stocks", "stocks up 5% today", "momentum burst", "hold a few days",
   "backtest my swing setup", "GTT stop loss", "manage my swing positions".
-argument-hint: "[scan | plan SYMBOL | backtest | manage]"
+argument-hint: "[scan | plan SYMBOL | backtest | study | manage]"
 ---
 
 # trader-swing
@@ -35,6 +38,9 @@ python3 "${CLAUDE_SKILL_DIR}/swing.py" plan TITAN --data kite-daily/ --write # C
 python3 "${CLAUDE_SKILL_DIR}/swing.py" backtest --data kite-daily/          # all setups, with costs
 python3 "${CLAUDE_SKILL_DIR}/swing.py" backtest --data kite-daily/ --setups breakout --trades trades.csv
 python3 "${CLAUDE_SKILL_DIR}/swing.py" manage --data kite-daily/            # trader/swing-positions.json
+python3 "${CLAUDE_SKILL_DIR}/swing.py" scan --data kite-daily/ --setups momentum --quotes quotes.json  # 3:15 PM
+python3 "${CLAUDE_SKILL_DIR}/swing.py" study --data kite-daily/ --entry close   # what holding 1-10 days returned
+python3 "${CLAUDE_SKILL_DIR}/swing.py" backtest --data kite-daily/ --setups momentum --entry close
 ```
 
 Other flags: `--asof YYYY-MM-DD` (scan or plan as of a past close),
@@ -60,6 +66,7 @@ Yahoo daily bars (unofficial, can lag).
 | pullback | a dip to the 20-day EMA on falling volume in the last 5 days, then a close above the day before's high and the EMA. Stop: the dip's low |
 | breakout | a 30-day base at most 15% deep; the first close above its high on 1.5x the 50-day volume, in the top 40% of the day. Stop: the 10-day low or 2 ATR, the closer |
 | rsi60 | monthly and weekly RSI(14) above 60, daily above 60, the first close above the 10-day swing high. Stop: last week's low. Exit: a daily close with RSI under 60 |
+| momentum | up 5%+ on 2x the 50-day volume, closing in the top 30% of the day, the first such day, not over 60% above the 50-day average; liquid (₹10 crore a day); no trend filter. Stop: the burst day's low, at most 10% away. Exit: the close of day 5 |
 | near breakout | watch list only: a tight base (12% deep at most), the close within 3% under its high, volume drying up, RSI 50 to 70. Gives the trigger (base high) and a stop |
 | entry | a LIMIT buy 0.5% above the signal close (a gap up is not chased); the backtest uses the next open |
 | size | 1% of `swing_capital` at risk (charges included), at most 25% of capital in one stock, 5 positions, 6% open risk |
@@ -91,6 +98,41 @@ test changes on your own list of stocks, keep it on paper, and treat any
 claim of an "85% win rate" setup with suspicion. The stock list is today's
 winners (survivorship), so real results would likely be worse.
 
+## Momentum bursts: what holding them returned
+
+75 stocks (the 36 large caps above plus 39 volatile mid caps: PSU, defence,
+power, metals, brokers), Kite daily candles 2021-11 to 2026-11, 719 bursts.
+Bought at the burst day's close, after Zerodha delivery charges:
+
+| held | avg | median | win | baseline (any day, same stocks) |
+| --- | --- | --- | --- | --- |
+| 1 day | +0.09% | -0.16% | 48% | +0.09% |
+| 3 days | +0.40% | -0.03% | 50% | +0.27% |
+| 5 days | +1.01% | +0.26% | 52% | +0.44% |
+| 10 days | +1.64% | +0.34% | 53% | +0.86% |
+
+- "It continues the next day" is a coin flip: the next day averages the same
+  as any day. The extra return shows up over about 5 days, and it is small:
+  roughly +0.5% a trade over the baseline, with a median near zero (a few big
+  winners carry it).
+- Buying at the next open instead is worse: the open gaps up 0.5% on average,
+  and 1 day held averages -0.40%. Buy in the last minutes of the burst day
+  (scan at 3:15 PM with `--quotes`).
+- As a full system (1% risk, 5 positions, stop at the burst low, sold on day
+  5, bought at the close): +61% over 5 years with a 17% max drawdown, against
+  +40% for the Nifty. But almost all of it came in 2023 and 2024 (the PSU and
+  small-cap rally): 2022 was -0.04R a trade, 2025 -0.13R and 2026 -0.25R.
+  From May 2025 it lost (84 trades, -0.14R, profit factor 0.64).
+- With the market filter on, 5-day bursts averaged +1.1%; in a bear market
+  +0.1%. The list is today's survivors (IRFC, BSE, Mazagon Dock), so the real
+  edge is likely smaller.
+
+A real case: Antelopus Selan Energy's +12% to +20% days in September and
+October 2026. The first burst (2 Sep, 91x volume) gained 23% in 5 days; the
+later ones, with the stock already 30% to 40% above its 50-day average,
+lost 12% to 13% at the stop. This rule skips all of them: on 10% to 20%
+days the day's low is more than 10% away, so the risk is too big.
+
 ## Steps
 
 1. After 15:30 IST: refresh the Kite files (or use `--symbols`), then
@@ -107,7 +149,11 @@ winners (survivorship), so real results would likely be worse.
 5. After the buy fills, the GTT is a second order: show it and get a separate
    yes before calling `place_gtt_order`. In paper mode nothing is sent and
    `trader/swing-positions.json` tracks it.
-6. Each evening: `swing.py manage --data kite-daily/`. It says hold, move the
+6. Momentum: at 3:15 PM save Kite `get_quotes` for the watch list to
+   `quotes.json` and run `scan --setups momentum --quotes quotes.json`. A
+   burst can be bought before 3:30 PM as a CNC limit; the stop goes in as a
+   GTT, and `manage` says sell on day 5.
+7. Each evening: `swing.py manage --data kite-daily/`. It says hold, move the
    stop to the entry (modify the GTT), exit on the time stop or the rsi60
    rule, or check a fill. Every change goes through the user's yes.
 

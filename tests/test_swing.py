@@ -276,3 +276,85 @@ class Manage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Momentum(unittest.TestCase):
+    def burst(self, chg=6.0, vx=3.0, close_frac=0.95):
+        closes = [100 + (k % 7) * 0.3 + k * 0.05 for k in range(120)]
+        bars = bars_from(closes)
+        y = bars[-1]
+        c = y["c"] * (1 + chg / 100.0)
+        lo = y["c"] * 1.0
+        hi = lo + (c - lo) / close_frac
+        d = y["d"] + dt.timedelta(days=1 if y["d"].weekday() < 4 else 3)
+        bars.append({"d": d, "o": lo + 0.1, "h": hi, "l": lo, "c": c, "v": 1e6 * vx})
+        return bars
+
+    def test_fires_on_a_5pct_day_on_volume_closing_near_the_high(self):
+        bars = self.burst()
+        ind = swing.indicators(bars)
+        sig = swing.setup_momentum("X", ind, len(bars) - 1, dict(swing.DEFAULTS))
+        self.assertIsNotNone(sig)
+        tick = swing.tick_for(bars[-1]["c"])
+        self.assertEqual(sig["stop"], swing.floor_tick(bars[-1]["l"] - tick, tick))
+        self.assertGreaterEqual(sig["day_change_pct"], 5)
+
+    def test_needs_volume_and_a_strong_close(self):
+        cfg = dict(swing.DEFAULTS)
+        for kw in ({"vx": 1.5}, {"close_frac": 0.5}, {"chg": 4.0}):
+            bars = self.burst(**kw)
+            ind = swing.indicators(bars)
+            self.assertIsNone(swing.setup_momentum("X", ind, len(bars) - 1, cfg), kw)
+
+    def test_a_stop_too_far_is_skipped(self):
+        bars = self.burst(chg=14.0)            # a 14% day: the low is more than 10% under the close
+        ind = swing.indicators(bars)
+        self.assertIsNone(swing.setup_momentum("X", ind, len(bars) - 1, dict(swing.DEFAULTS)))
+
+    def test_plan_has_a_stop_only_gtt_and_a_5_day_hold(self):
+        bars = self.burst()
+        ind = swing.indicators(bars)
+        sig = swing.setup_momentum("X", ind, len(bars) - 1, dict(swing.DEFAULTS))
+        o = swing.plan_trade(sig, dict(swing.DEFAULTS))
+        self.assertEqual(o["gtt"]["trigger_type"], "single")
+        self.assertEqual(o["plan"]["time_stop_days"], 5)
+
+    def test_backtest_bought_at_the_close_sells_on_day_5(self):
+        bars = self.burst()
+        for k in range(7):
+            last = bars[-1]
+            d = last["d"] + dt.timedelta(days=1 if last["d"].weekday() < 4 else 3)
+            c = last["c"] + 0.5
+            bars.append({"d": d, "o": last["c"], "h": c + 0.3, "l": last["c"] - 0.2, "c": c, "v": 1e6})
+        res = swing.backtest({"X": bars}, None, dict(swing.DEFAULTS), setups=["momentum"], entry="close")
+        t = res["trades"][0]
+        self.assertEqual(t["entry"], round(bars[120]["c"], 2))      # the burst day's close
+        self.assertEqual(t["reason"], "hold period over")
+        self.assertEqual(t["exit"], round(bars[125]["c"], 2))       # the close 5 sessions later
+
+    def test_study_counts_days_from_the_entry(self):
+        bars = self.burst()
+        for k in range(12):
+            last = bars[-1]
+            d = last["d"] + dt.timedelta(days=1 if last["d"].weekday() < 4 else 3)
+            bars.append({"d": d, "o": last["c"], "h": last["c"] + 1.2, "l": last["c"] - 0.1,
+                         "c": last["c"] + 1, "v": 1e6})
+        rows, base = swing.forward_study({"X": bars}, None, dict(swing.DEFAULTS), ["momentum"], (1, 5), entry="close")
+        self.assertEqual(len(rows), 1)
+        e = bars[120]["c"]
+        expect = (bars[125]["c"] - e) / e * 100
+        self.assertAlmostEqual(rows[0]["hold"][5], expect, delta=0.4)    # less delivery charges
+        self.assertLess(rows[0]["hold"][5], expect)
+
+    def test_live_quotes_add_todays_bar(self):
+        bars = bars_from([100 + k * 0.1 for k in range(30)])
+        data = {"RELIANCE": bars}
+        last = bars[-1]["d"]
+        nxt = last + dt.timedelta(days=1 if last.weekday() < 4 else 3)
+        q = {"NSE:RELIANCE": {"last_price": 110.0, "volume": 5e6, "last_trade_time": nxt.isoformat() + " 15:14:58",
+                              "ohlc": {"open": 103, "high": 110.5, "low": 102.8, "close": bars[-1]["c"]}}}
+        self.assertEqual(swing.merge_quotes(data, q), ["RELIANCE"])
+        self.assertEqual(data["RELIANCE"][-1]["c"], 110.0)
+        self.assertEqual(data["RELIANCE"][-1]["d"], nxt)
+        swing.merge_quotes(data, q)
+        self.assertEqual(len(data["RELIANCE"]), 31)                    # same day again: replaced, not added

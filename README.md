@@ -64,7 +64,7 @@ The tools need Python 3.8 or newer. Nothing to pip install.
 | `/trader-broker` | Order Executor | Sends approved orders to Zerodha Kite as cover orders, paper trading by default, never without your yes. |
 | `/trader-alerts` | Price Alerts | Rings when a price, a stop, the flat-by time or the 9:15 bell hits. |
 | `/trader-insider` | Insider Tracker | SEBI PIT insider trades and NSE bulk / block deals, flagged when they touch your stocks. |
-| `/trader-swing` | Swing Trader | After-close scan for pullbacks, breakouts, RSI-60 momentum and stocks near a breakout; CNC buy with a GTT stop and target; a costed backtest. |
+| `/trader-swing` | Swing Trader | Scans for pullbacks, breakouts, RSI-60, 5% momentum bursts and stocks near a breakout; CNC buy with a GTT stop and target; a costed backtest. |
 
 ## How to use it
 
@@ -143,17 +143,25 @@ them loosely, and the first live run is worth watching.
 ## Swing trading
 
 `/trader-swing` holds stocks for days to weeks as delivery (CNC). After the
-close it checks the Nifty's trend, scans for three setups (pullback to the
-20-day EMA, volume breakout from a base, multi-timeframe RSI-60) and lists
+close it checks the Nifty's trend, scans for four setups (pullback to the
+20-day EMA, volume breakout from a base, multi-timeframe RSI-60, momentum
+burst) and lists
 stocks coiling just under a breakout, with the trigger and a stop. It sizes a
 trade to 1% of your swing capital after Zerodha's delivery charges and writes
 a CNC limit buy plus a GTT OCO order for the stop and the 2R target.
 
-Its backtest runs the exact rules on Kite daily candles with costs. On 36
-large caps from 2022 to 2026 the honest answer was: no edge after costs
-(400 trades, 37% wins, -0.05R a trade; breakout and RSI-60 near break-even,
-pullback negative) while the Nifty rose 40%. The tool is for testing ideas on
-your own stocks before risking money, not a proof that any setup works.
+It also has a momentum mode for the classic "stock up 5% on big volume, hold
+a few days" trade: a 3:15 PM scan from live Kite quotes, a 5-day hold, and a
+stop at the burst day's low.
+
+Its backtest runs the exact rules on Kite daily candles with costs, and the
+results are in the skill's docs, good and bad. In short: on 36 large caps
+from 2022 to 2026 the pullback, breakout and RSI-60 rules showed no edge after
+costs. Momentum bursts in 75 volatile stocks, bought at the close and held 5
+days, averaged +1.0% a trade after charges (+0.5% over a random day), but
+almost all of that came in 2023 and 2024 and it has lost since mid 2025. The
+tool is for testing ideas on your own stocks before risking money, not proof
+that any setup works.
 See `trader-swing/SKILL.md`.
 
 ## Fine print

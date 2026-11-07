@@ -7,6 +7,8 @@ Standard library only.
     python3 swing.py plan TRENT --data kite-daily/ --write   # size it, write the CNC buy + GTT stop/target
     python3 swing.py backtest --data kite-daily/             # every setup, 5 years, with Zerodha costs
     python3 swing.py manage --data kite-daily/               # open swing positions: breakeven, time stop, exits
+    python3 swing.py scan --data kite-daily/ --setups momentum --quotes quotes.json   # 3:15 PM, today's bursts
+    python3 swing.py study --data kite-daily/ --entry close  # what holding a burst 1-10 days returned
 
 Daily bars come from a folder of Kite get_historical_data files (one
 SYMBOL.json per stock, interval "day", plus NIFTY_50.json for the market
@@ -33,6 +35,15 @@ trader/config.json):
                             RSI above 60, and the first close above the
                             10-day swing high. Stop: last week's low. Exit:
                             a daily close with RSI back under 60.
+  momentum                  a momentum burst: up 5% or more on 2x the 50-day
+                            volume, closing in the top 30% of the day's
+                            range, the first such day (not the second day of a
+                            run), not more than 60% above the 50-day average.
+                            No trend filter. Stop: the burst day's low (at most
+                            10% away). Exit: the close of day 5. Best bought in
+                            the last minutes of the burst day (scan at 3:15 PM
+                            with --quotes from Kite); the next open gaps up 0.5%
+                            on average.
   near breakout (watch)     a tight 30-day base (12% deep at most), the close
                             within 3% under its high, volume drying up, daily
                             RSI 50 to 70. Not a trade: a level to watch, with
@@ -86,10 +97,14 @@ DEFAULTS = {
     "breakeven_at_r": 1.0,
     "time_stop_days": 10,
     "time_stop_days_rsi60": 40,
+    "momentum_min_pct": 5.0,
+    "momentum_vol_x": 2.0,
+    "momentum_hold_days": 5,
+    "momentum_max_risk_pct": 10.0,
     "min_risk_pct": 0.8,
     "max_risk_pct": 8.0,
     "entry_buffer_pct": 0.5,
-    "setups": ["pullback", "breakout", "rsi60"],
+    "setups": ["pullback", "breakout", "rsi60", "momentum"],
     "regime": True,
     "paper": True,
 }
@@ -98,7 +113,8 @@ CHARGES = {
     "stamp_buy_pct": 0.015, "gst_pct": 18.0, "dp_per_sell": 15.34,
 }
 TICK_BANDS = ((250, 0.01), (1000, 0.05), (5000, 0.10), (10000, 0.50), (20000, 1.0), (None, 5.0))
-SETUPS = ("pullback", "breakout", "rsi60")
+SETUPS = ("pullback", "breakout", "rsi60", "momentum")
+NO_TARGET = ("rsi60", "momentum")      # these exit on a rule or a hold period, not a 2R target
 
 
 class SwingError(Exception):
@@ -289,6 +305,35 @@ def load_yahoo(symbols, pause=0.3):
     return data, index, failed
 
 
+def merge_quotes(data, doc):
+    """Kite get_quotes output -> today's (still forming) bar added to each stock,
+    so a 3:15 PM scan sees today's move. Returns the symbols updated."""
+    if isinstance(doc, dict) and isinstance(doc.get("data"), dict):
+        doc = doc["data"]
+    done = []
+    for key, q in (doc or {}).items():
+        if not isinstance(q, dict) or q.get("last_price") is None:
+            continue
+        sym = plain_symbol(key)
+        if sym not in data:
+            continue
+        ohlc = q.get("ohlc") or {}
+        when = q.get("last_trade_time") or q.get("timestamp")
+        if not when:
+            continue
+        d = _date_of(when)
+        bar = {"d": d, "o": float(ohlc.get("open") or q["last_price"]), "h": float(ohlc.get("high") or q["last_price"]),
+               "l": float(ohlc.get("low") or q["last_price"]), "c": float(q["last_price"]),
+               "v": float(q.get("volume") or q.get("volume_traded") or 0)}
+        bars = data[sym]
+        if bars and bars[-1]["d"] == d:
+            bars[-1] = bar
+        elif not bars or bars[-1]["d"] < d:
+            bars.append(bar)
+        done.append(sym)
+    return done
+
+
 # ---------------------------------------------------------------- indicators
 
 def sma(xs, n):
@@ -456,7 +501,8 @@ def _signal(sym, ind, i, setup, stop, why, cfg, extra=None):
     tick = tick_for(c)
     stop = floor_tick(stop - tick, tick)
     risk_pct = (c - stop) / c * 100.0
-    if not (cfg["min_risk_pct"] <= risk_pct <= cfg["max_risk_pct"]):
+    top = cfg["momentum_max_risk_pct"] if setup == "momentum" else cfg["max_risk_pct"]
+    if not (cfg["min_risk_pct"] <= risk_pct <= top):
         return None
     sig = {"symbol": sym, "setup": setup, "date": ind["bars"][i]["d"].isoformat(), "close": round(c, 2),
            "stop": stop, "risk_pct": round(risk_pct, 2), "why": why}
@@ -526,6 +572,35 @@ def setup_rsi60(sym, ind, i, cfg):
                    % (m, w, d, swing_hi), cfg)
 
 
+def liquid(ind, i, cfg):
+    return (ind["tv50"][i] is not None and ind["c"][i] >= cfg["min_price"]
+            and ind["tv50"][i] >= cfg["min_traded_value_cr"] * 1e7)
+
+
+def setup_momentum(sym, ind, i, cfg):
+    """A momentum burst: a big up day on unusual volume, closing near its high.
+    No trend filter (the burst is the signal); liquid stocks only."""
+    if i < 60 or not liquid(ind, i - 1, cfg):
+        return None
+    b = ind["bars"]
+    t, y = b[i], b[i - 1]
+    chg = (t["c"] / y["c"] - 1) * 100
+    if chg < cfg["momentum_min_pct"]:
+        return None
+    if (y["c"] / b[i - 2]["c"] - 1) * 100 >= cfg["momentum_min_pct"]:
+        return None                                    # the first burst, not the second day of one
+    vx = t["v"] / ind["vol50"][i - 1] if ind["vol50"][i - 1] else 0
+    rng = t["h"] - t["l"]
+    if vx < cfg["momentum_vol_x"] or rng <= 0 or (t["c"] - t["l"]) / rng < 0.7:
+        return None
+    if ind["sma50"][i] and t["c"] > 1.6 * ind["sma50"][i]:
+        return None                                    # already far extended: a blow-off, not a burst
+    return _signal(sym, ind, i, "momentum", t["l"],
+                   "up %.1f%% on %.1fx volume, closed %.1f%% under the day's high" % (
+                       chg, vx, (t["h"] - t["c"]) / t["h"] * 100), cfg,
+                   {"day_change_pct": round(chg, 2), "volume_x": round(vx, 1)})
+
+
 def near_breakout(sym, ind, i, cfg, max_depth=0.12, within=0.03):
     """A stock coiling under its base high: a level to watch, not a trade."""
     if i < 210 or not stock_ok(ind, i, cfg):
@@ -553,7 +628,16 @@ def near_breakout(sym, ind, i, cfg, max_depth=0.12, within=0.03):
             "risk_pct_at_trigger": round((trigger - stop) / trigger * 100, 2)}
 
 
-SETUP_FUNCS = {"pullback": setup_pullback, "breakout": setup_breakout, "rsi60": setup_rsi60}
+SETUP_FUNCS = {"pullback": setup_pullback, "breakout": setup_breakout, "rsi60": setup_rsi60,
+               "momentum": setup_momentum}
+
+
+def hold_limit(setup, cfg):
+    if setup == "rsi60":
+        return cfg["time_stop_days_rsi60"]
+    if setup == "momentum":
+        return cfg["momentum_hold_days"]
+    return cfg["time_stop_days"]
 
 
 def rel_strength(ind, index_ind, i, n=63):
@@ -661,7 +745,7 @@ def plan_trade(sig, cfg, open_positions=None, capital=None):
         qty -= 1
     if qty < 1:
         raise SwingError("one share risks more than the %s allowed: skip it" % money(risk_inr))
-    target = ceil_tick(limit + cfg["target_r"] * risk, tick) if sig["setup"] != "rsi60" else None
+    target = ceil_tick(limit + cfg["target_r"] * risk, tick) if sig["setup"] not in NO_TARGET else None
     at_stop = charges(qty, limit, stop)
     loss = qty * risk + at_stop["total"]
     gain = None
@@ -682,7 +766,7 @@ def plan_trade(sig, cfg, open_positions=None, capital=None):
             "stop": stop, "target": target, "risk_per_share": round(risk, 2), "qty": qty,
             "value": round(qty * limit, 2), "loss_at_stop": round(loss, 2), "charges_at_stop": at_stop["total"],
             "gain_at_target": round(gain, 2) if gain is not None else None,
-            "time_stop_days": cfg["time_stop_days_rsi60"] if sig["setup"] == "rsi60" else cfg["time_stop_days"],
+            "time_stop_days": hold_limit(sig["setup"], cfg),
             "breakeven_at_r": cfg["breakeven_at_r"], "why": sig.get("why", "")}
     order["gtt"] = gtt
     order["plan"] = plan
@@ -703,7 +787,8 @@ def print_plan(order, cfg):
     if p["target"]:
         print("  Target   %.2f  (%.0fR)" % (p["target"], cfg["target_r"]))
     else:
-        print("  Target   none: rsi60 exits on a daily close with RSI under 60")
+        print("  Target   none: %s" % ("rsi60 exits on a daily close with RSI under 60" if p["setup"] == "rsi60"
+                                         else "momentum sells at the close of day %d" % p["time_stop_days"]))
     print("  At stop  lose about %s including %s of charges (a gap down can lose more)"
           % (money(p["loss_at_stop"]), money(p["charges_at_stop"])))
     if p["gain_at_target"] is not None:
@@ -728,7 +813,8 @@ def print_plan(order, cfg):
 
 # ---------------------------------------------------------------- backtest
 
-def backtest(data, index, cfg, start=None, end=None, setups=None, capital=None):
+def backtest(data, index, cfg, start=None, end=None, setups=None, capital=None, entry="open"):
+    """entry="close": momentum signals buy at the signal day's close (a 3:20 PM buy) instead of the next open."""
     setups = setups or cfg["setups"]
     capital = capital or cfg["swing_capital"]
     inds = {s: indicators(b) for s, b in data.items()}
@@ -758,6 +844,31 @@ def backtest(data, index, cfg, start=None, end=None, setups=None, capital=None):
                        "qty": p["qty"], "pnl": round(pnl, 2), "r": round(pnl / p["risk_inr"], 3),
                        "days": p["days"], "reason": reason})
 
+    def enter(sig, o, d, equity, held):
+        nonlocal cash
+        stop = sig["stop"]
+        top = cfg["momentum_max_risk_pct"] if sig["setup"] == "momentum" else cfg["max_risk_pct"]
+        if o <= stop or (o - stop) / o * 100 > top:
+            return
+        risk = o - stop
+        risk_inr = equity * cfg["risk_per_trade_pct"] / 100.0 * sig["mult"]
+        open_risk = sum(max(0.0, (p["entry"] - p["stop"]) * p["qty"]) for p in positions)
+        risk_inr = min(risk_inr, equity * cfg["max_open_risk_pct"] / 100.0 - open_risk)
+        if risk_inr <= 0:
+            return
+        qty = int(risk_inr // risk)
+        qty = min(qty, int(equity * cfg["max_position_pct"] / 100.0 // o), int(cash // (o * 1.0015)))
+        if qty < 1:
+            return
+        ch = charges(qty, buy=o)
+        cost = qty * o + ch["total"]
+        cash -= cost
+        target = o + cfg["target_r"] * risk if sig["setup"] not in NO_TARGET else None
+        positions.append({"symbol": sig["symbol"], "setup": sig["setup"], "entry": o, "stop": stop,
+                          "stop0": stop, "target": target, "qty": qty, "cost": cost, "entry_date": d,
+                          "risk_inr": qty * risk, "days": 0, "last": o, "at_close": sig.get("at_close", False)})
+        held.add(sig["symbol"])
+
     for d in dates:
         equity = cash + sum(p["qty"] * p["last"] for p in positions)
         # 1. yesterday's signals enter at today's open, best relative strength first
@@ -766,29 +877,8 @@ def backtest(data, index, cfg, start=None, end=None, setups=None, capital=None):
             if len(positions) >= cfg["max_positions"] or sig["symbol"] in held:
                 continue
             i, b = bar(sig["symbol"], d)
-            if b is None:
-                continue
-            o, stop = b["o"], sig["stop"]
-            if o <= stop or (o - stop) / o * 100 > cfg["max_risk_pct"]:
-                continue
-            risk = o - stop
-            risk_inr = equity * cfg["risk_per_trade_pct"] / 100.0 * sig["mult"]
-            open_risk = sum(max(0.0, (p["entry"] - p["stop"]) * p["qty"]) for p in positions)
-            risk_inr = min(risk_inr, equity * cfg["max_open_risk_pct"] / 100.0 - open_risk)
-            if risk_inr <= 0:
-                continue
-            qty = int(risk_inr // risk)
-            qty = min(qty, int(equity * cfg["max_position_pct"] / 100.0 // o), int(cash // (o * 1.0015)))
-            if qty < 1:
-                continue
-            ch = charges(qty, buy=o)
-            cost = qty * o + ch["total"]
-            cash -= cost
-            target = o + cfg["target_r"] * risk if sig["setup"] != "rsi60" else None
-            positions.append({"symbol": sig["symbol"], "setup": sig["setup"], "entry": o, "stop": stop,
-                              "stop0": stop, "target": target, "qty": qty, "cost": cost, "entry_date": d,
-                              "risk_inr": qty * risk, "days": 0, "last": o})
-            held.add(sig["symbol"])
+            if b is not None:
+                enter(sig, b["o"], d, equity, held)
         pending = []
         # 2. stops and targets during the day; then the close
         still = []
@@ -797,8 +887,11 @@ def backtest(data, index, cfg, start=None, end=None, setups=None, capital=None):
             if b is None:
                 still.append(p)
                 continue
-            p["days"] += 1 if d != p["entry_date"] else 0
-            if b["o"] <= p["stop"] and d != p["entry_date"]:
+            if p.get("at_close") and d == p["entry_date"]:
+                still.append(p)
+                continue
+            p["days"] += 1 if (d != p["entry_date"] or p.get("at_close")) else 0
+            if b["o"] <= p["stop"] and (d != p["entry_date"]):
                 close_pos(p, d, b["o"], "gap through stop")
                 continue
             if b["l"] <= p["stop"]:
@@ -812,18 +905,18 @@ def backtest(data, index, cfg, start=None, end=None, setups=None, capital=None):
             if p["setup"] == "rsi60" and ind["rsi"][i] is not None and ind["rsi"][i] < 60:
                 close_pos(p, d, b["c"], "RSI under 60")
                 continue
-            limit_days = cfg["time_stop_days_rsi60"] if p["setup"] == "rsi60" else cfg["time_stop_days"]
-            if p["days"] >= limit_days:
-                close_pos(p, d, b["c"], "time stop")
+            if p["days"] >= hold_limit(p["setup"], cfg):
+                close_pos(p, d, b["c"], "hold period over" if p["setup"] == "momentum" else "time stop")
                 continue
-            if r_now >= cfg["breakeven_at_r"]:
+            if r_now >= cfg["breakeven_at_r"] and p["setup"] != "momentum":
                 p["stop"] = max(p["stop"], p["entry"])
             p["last"] = b["c"]
             still.append(p)
         positions = still
         equity = cash + sum(p["qty"] * p["last"] for p in positions)
         curve.append((d, equity))
-        # 3. today's signals, for tomorrow's open
+        # 3. today's signals, for tomorrow's open (or, for momentum with entry="close", bought now)
+        closers = []
         mult, _ = regime_at(index_ind, d) if cfg.get("regime", True) else (1.0, "")
         for sym, ind in inds.items():
             i = ind["idx"].get(d)
@@ -832,13 +925,25 @@ def backtest(data, index, cfg, start=None, end=None, setups=None, capital=None):
             if mult > 0:
                 for name in setups:
                     sig = SETUP_FUNCS[name](sym, ind, i, cfg)
-                    if sig:
-                        pending.append({"symbol": sym, "setup": name, "stop": sig["stop"], "mult": mult,
-                                        "rs": rel_strength(ind, index_ind, i)})
+                    if not sig:
+                        continue
+                    rec = {"symbol": sym, "setup": name, "stop": sig["stop"], "mult": mult,
+                           "rs": rel_strength(ind, index_ind, i)}
+                    if entry == "close" and name == "momentum":
+                        rec["at_close"] = True
+                        closers.append((rec, ind["c"][i]))
+                    else:
+                        pending.append(rec)
             nb = near_breakout(sym, ind, i, cfg)
             if nb and (sym not in last_flag or (d - last_flag[sym]).days > 14):
                 last_flag[sym] = d
                 near_flags.append((sym, i, nb))
+        if closers:
+            held = {p["symbol"] for p in positions}
+            for rec, px in sorted(closers, key=lambda x: -x[0]["rs"]):
+                if len(positions) < cfg["max_positions"] and rec["symbol"] not in held:
+                    enter(rec, px, d, equity, held)
+            curve[-1] = (d, cash + sum(p["qty"] * p["last"] for p in positions))
     end_d = dates[-1]
     for p in positions:
         i, b = bar(p["symbol"], end_d)
@@ -946,6 +1051,121 @@ def _print_stats(label, s):
             s["max_drawdown_pct"], s["worst_losing_streak"], money(s["pnl"])))
 
 
+# ---------------------------------------------------------------- study: what holding N days returned
+
+def forward_study(data, index, cfg, setups, horizons=(1, 2, 3, 5, 10), start=None, end=None, notional=100000.0,
+                  entry="open"):
+    """Every signal, no position limits: buy at the next open, sell at the close
+    of day N (the entry day is day 1). Returns in percent after delivery charges
+    on a notional position; "with stop" exits at the signal's stop (or the open,
+    if it gaps below) when touched first. Also the same N-day return from every
+    day in the same stocks, as the baseline to beat. entry="close" buys at the
+    signal day's close instead (a buy in the last minutes, 3:20 to 3:30 PM);
+    then day 1 is the next session."""
+    index_ind = indicators(index) if index else None
+    rows, base = [], {h: [] for h in horizons}
+    for sym, bars in data.items():
+        ind = indicators(bars)
+        n = len(bars)
+        for i in range(n - 1):
+            d = bars[i]["d"]
+            if (start and d < start) or (end and d > end):
+                continue
+            at_close = entry == "close"
+            e = bars[i]["c"] if at_close else bars[i + 1]["o"]
+            for h in horizons:
+                j = i + h          # open entry: day 1 is the entry day; close entry: day 1 is the next session
+                if j < n:
+                    base[h].append((bars[j]["c"] / e - 1) * 100)
+            mult = regime_at(index_ind, d)[0] if cfg.get("regime", True) else 1.0
+            for name in setups:
+                sig = SETUP_FUNCS[name](sym, ind, i, cfg)
+                if not sig:
+                    continue
+                qty = max(1, int(notional // e))
+                rec = {"symbol": sym, "setup": name, "date": d.isoformat(), "entry": e, "regime": mult,
+                       "hold": {}, "stop": {}}
+                stopped = None
+                for k in range(1, max(horizons) + 1):
+                    j = i + k
+                    if j >= n:
+                        break
+                    bj = bars[j]
+                    if stopped is None:
+                        if (k > 1 or at_close) and bj["o"] <= sig["stop"]:
+                            stopped = bj["o"]
+                        elif bj["l"] <= sig["stop"]:
+                            stopped = sig["stop"]
+                    if k in horizons:
+                        for key, px in (("hold", bj["c"]), ("stop", stopped if stopped is not None else bj["c"])):
+                            ch = charges(qty, e, px)["total"]
+                            rec[key][k] = round(((px - e) * qty - ch) / (e * qty) * 100, 3)
+                rows.append(rec)
+    return rows, base
+
+
+def _pct_stats(xs):
+    if not xs:
+        return None
+    xs = sorted(xs)
+    n = len(xs)
+    wins = [x for x in xs if x > 0]
+    losses = [x for x in xs if x <= 0]
+    return {"n": n, "avg": round(sum(xs) / n, 2), "median": round(xs[n // 2], 2),
+            "win_rate": round(len(wins) / n * 100, 1),
+            "avg_win": round(sum(wins) / len(wins), 2) if wins else 0.0,
+            "avg_loss": round(sum(losses) / len(losses), 2) if losses else 0.0,
+            "best": round(xs[-1], 1), "worst": round(xs[0], 1)}
+
+
+def print_study(rows, base, horizons, setups, n_symbols, split, entry="open"):
+    if entry == "close":
+        print("What holding N days returned: every signal, bought at the signal day's close (3:20 to 3:30 PM),")
+        print("sold at the close N sessions later, after Zerodha delivery charges on a Rs 1 lakh position. %d stocks."
+              % n_symbols)
+    else:
+        print("What holding N days returned: every signal, bought at the next open, sold at the close of day N")
+        print("(the entry day is day 1), after Zerodha delivery charges on a Rs 1 lakh position. %d stocks."
+              % n_symbols)
+    for name in setups:
+        rs = [r for r in rows if r["setup"] == name]
+        print()
+        print("%s: %d signals (%d when the market filter allowed new trades)" % (
+            name, len(rs), sum(1 for r in rs if r["regime"] > 0)))
+        if not rs:
+            continue
+        print("  %-6s %-20s %8s %8s %8s %9s %9s %8s" % ("days", "", "avg %", "median", "win %", "avg win", "avg loss",
+                                                        "worst"))
+        for h in horizons:
+            for key, label in (("hold", "just hold"), ("stop", "with the stop")):
+                st = _pct_stats([r[key][h] for r in rs if h in r[key]])
+                if st:
+                    print("  %-6d %-20s %+8.2f %+8.2f %7.1f%% %+9.2f %+9.2f %+8.1f" % (
+                        h, label, st["avg"], st["median"], st["win_rate"], st["avg_win"], st["avg_loss"], st["worst"]))
+            b = _pct_stats(base[h])
+            if b:
+                print("  %-6d %-20s %+8.2f %+8.2f %7.1f%%   (any day in these stocks, before charges)" % (
+                    h, "baseline", b["avg"], b["median"], b["win_rate"]))
+        early = [r for r in rs if r["date"] < split]
+        late = [r for r in rs if r["date"] >= split]
+        h = 5 if 5 in horizons else horizons[-1]
+        for lab, part in (("before %s" % split, early), ("from %s" % split, late)):
+            st = _pct_stats([r["stop"][h] for r in part if h in r["stop"]])
+            if st:
+                print("  %d days with the stop, %s: %d signals, avg %+.2f%%, win %.1f%%" % (
+                    h, lab, st["n"], st["avg"], st["win_rate"]))
+        on = [r for r in rs if r["regime"] > 0]
+        off = [r for r in rs if r["regime"] == 0]
+        for lab, part in (("market filter on (trades allowed)", on), ("market filter off (bear market)", off)):
+            st = _pct_stats([r["stop"][h] for r in part if h in r["stop"]])
+            if st:
+                print("  %d days with the stop, %s: %d signals, avg %+.2f%%, win %.1f%%" % (
+                    h, lab, st["n"], st["avg"], st["win_rate"]))
+    print()
+    print("Average % is per trade, before position sizing. These stocks are today's survivors, so the test leans")
+    print("optimistic. Past results are not a forecast. Not financial advice.")
+
+
 # ---------------------------------------------------------------- manage
 
 def manage(positions, data, cfg, asof=None):
@@ -969,7 +1189,7 @@ def manage(positions, data, cfg, asof=None):
         entry_d = datetime.date.fromisoformat(p["entry_date"])
         held = sum(1 for x in bars[:i + 1] if x["d"] > entry_d)
         setup = p.get("setup", "")
-        limit_days = cfg["time_stop_days_rsi60"] if setup == "rsi60" else cfg["time_stop_days"]
+        limit_days = hold_limit(setup, cfg)
         row = {"symbol": sym, "close": b["c"], "entry": entry, "stop": stop, "r_now": round(r_now, 2),
                "days": held}
         if b["c"] <= stop:
@@ -999,6 +1219,9 @@ def _get_data(a):
         if a.symbols:
             want = set(_symbols_arg(a.symbols))
             data = {k: v for k, v in data.items() if k in want}
+        if getattr(a, "quotes", None):
+            with open(a.quotes, encoding="utf-8") as fh:
+                merge_quotes(data, json.load(fh))
         return data, index, {}
     if a.symbols:
         return load_yahoo(_symbols_arg(a.symbols))
@@ -1018,7 +1241,9 @@ def main(argv=None):
     p = sub.add_parser("scan", help="setups that fired today, and stocks near a breakout")
     common(p)
     p.add_argument("--asof", help="scan as of this date (YYYY-MM-DD)")
-    p.add_argument("--setups", help="comma-separated: pullback, breakout, rsi60")
+    p.add_argument("--setups", help="comma-separated: pullback, breakout, rsi60, momentum")
+    p.add_argument("--quotes", metavar="FILE",
+                   help="Kite get_quotes saved to a file: adds today's live bar (for a 3:15 PM momentum scan)")
     p.add_argument("--write", nargs="?", const="trader/swing-watchlist.json", metavar="PATH")
 
     p = sub.add_parser("plan", help="size one setup into a CNC buy + GTT stop/target")
@@ -1038,6 +1263,18 @@ def main(argv=None):
     p.add_argument("--setups")
     p.add_argument("--capital", type=float)
     p.add_argument("--trades", metavar="CSV", help="write every trade to a CSV")
+    p.add_argument("--entry", choices=["open", "close"], default="open",
+                   help="momentum: buy at the signal day's close instead of the next open")
+
+    p = sub.add_parser("study", help="what holding a signal 1, 2, 3, 5 or 10 days returned")
+    common(p)
+    p.add_argument("--setups", default="momentum")
+    p.add_argument("--days", default="1,2,3,5,10")
+    p.add_argument("--entry", choices=["open", "close"], default="open",
+                   help="buy at the next open (default) or at the signal day's close")
+    p.add_argument("--from", dest="start")
+    p.add_argument("--to", dest="end")
+    p.add_argument("--split")
 
     p = sub.add_parser("manage", help="open swing positions: breakeven, time stop, exits")
     common(p)
@@ -1105,7 +1342,8 @@ def main(argv=None):
         if a.cmd == "backtest":
             start = datetime.date.fromisoformat(a.start) if a.start else None
             end = datetime.date.fromisoformat(a.end) if a.end else None
-            res = backtest(data, index, cfg, start, end, a.setups.split(",") if a.setups else None, a.capital)
+            res = backtest(data, index, cfg, start, end, a.setups.split(",") if a.setups else None, a.capital,
+                           entry=a.entry)
             if a.split:
                 split = a.split
             else:
@@ -1127,6 +1365,28 @@ def main(argv=None):
                 print(json.dumps(res, indent=2, ensure_ascii=False))
             else:
                 print_backtest(res, split)
+            return 0
+        if a.cmd == "study":
+            horizons = tuple(int(x) for x in a.days.split(","))
+            setups = a.setups.split(",")
+            for name in setups:
+                if name not in SETUP_FUNCS:
+                    raise SwingError("unknown setup %r (%s)" % (name, ", ".join(SETUPS)))
+            start = datetime.date.fromisoformat(a.start) if a.start else None
+            end = datetime.date.fromisoformat(a.end) if a.end else None
+            rows, base = forward_study(data, index, cfg, setups, horizons, start, end, entry=a.entry)
+            dates = sorted(r["date"] for r in rows)
+            split = a.split or (dates[int(len(dates) * 0.7)] if dates else "2025-01-01")
+            if a.json:
+                out = {"split": split, "setups": {}}
+                for name in setups:
+                    rs = [r for r in rows if r["setup"] == name]
+                    out["setups"][name] = {str(h): {"hold": _pct_stats([r["hold"][h] for r in rs if h in r["hold"]]),
+                                                    "with_stop": _pct_stats([r["stop"][h] for r in rs if h in r["stop"]]),
+                                                    "baseline": _pct_stats(base[h])} for h in horizons}
+                print(json.dumps(out, indent=2))
+            else:
+                print_study(rows, base, horizons, setups, len(data), split, a.entry)
             return 0
         if a.cmd == "manage":
             if not os.path.exists(a.positions):
